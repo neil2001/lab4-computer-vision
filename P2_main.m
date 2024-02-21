@@ -1,0 +1,229 @@
+%> ------------------------------------------------------------------------
+%> ENGN2560: Computer Vision
+%>    Lab04: Absolute Camera Pose and Visual Odometry
+%> Problem2: Visual Odometry Part I
+%> ------------------------------------------------------------------------
+clc; clear all; close all;
+% rng(0);
+
+%> Load camera intrinsic matrix
+load('data/Problem2/IntrinsicMatrix.mat');
+
+%> Load ground truth poses
+load('data/Problem2/GT_Poses.mat');	%> GT_Poses
+
+%> Read all images in the sequence.
+%> Use imread(Image_Sequence(i).name); to read image i
+mfiledir = fileparts(mfilename('fullpath'));
+Image_Sequence = dir([mfiledir, '/data/Problem2/fr2_desk/*.png']);
+
+%> Parameters passed to RANSAC
+PARAMS.INLIER_THRESH                 = 2;      %> 2 pixels
+PARAMS.RANSAC_ITERATIONS             = 1200;    %> Total number of RANSAC iterations
+
+%> =========================================================
+%> TODO: Implement a Naive Visual Odometry 
+%> =========================================================
+
+nImgs = length(Image_Sequence);
+
+estimatedPoses = zeros(3, 4, nImgs);
+estimatedPoses(:,:,1) = [eye(3), zeros(3,1)];
+
+prop_scale = 1;
+for i=2:nImgs
+    % compute a pose
+    ImgA = imread(Image_Sequence(i-1).name);
+    ImgB = imread(Image_Sequence(i).name);
+    
+    [R, T, ~, ~, ~] = estimateRelativePose(PARAMS, ImgA, ImgB, K);
+    
+    Rgi = GT_Poses(:,1:3,i);
+    Tgi = GT_Poses(:,4,i);
+    cgi = -Rgi' * Tgi;
+    
+    Rgim1 = GT_Poses(:,1:3,i-1);
+    Tgim1 = GT_Poses(:,4,i-1);
+    cgim1 = -Rgim1' * Tgim1;
+    
+    s = norm(cgi - cgim1);
+    
+    prop_scale = prop_scale * s;
+    
+    T = prop_scale * T;
+    
+    estimatedPoses(:,:,i) = [R, T];
+end
+
+Visualize_Trajectory(GT_Poses, estimatedPoses, 0:10:nImgs);
+
+% compute RMSE for R and T
+r_sum = 0;
+t_sum = 0;
+for i=1:nImgs
+    R_gt = GT_Poses(:, 1:3, i);
+    T_gt = GT_Poses(:, 4, i);
+    
+    R = estimatedPoses(:, 1:3, i);
+    T = estimatedPoses(:, 4, i);
+    
+    [deltaR, deltaT] = getRT_Error(R, T, R_gt, T_gt);
+    r_sum = r_sum + (deltaR^2);
+    t_sum = t_sum + (deltaT^2);
+end
+
+rmse_R = sqrt(r_sum / nImgs);
+rmse_T = sqrt(t_sum / nImgs);
+
+disp(rmse_R);
+disp(rmse_T);
+
+% Functions ---------------------------------------------------------------
+
+function [deltaR, deltaT] = getRT_Error(R, T, Rg, Tg)
+    deltaR = acos((trace(Rg' * R) - 1) / 2);
+
+    Tg = Tg / norm(Tg);
+    T = T / norm(T);
+
+    deltaT = abs(dot(Tg, T) - 1);
+end
+
+function S = getSkewSymmetric(v)
+    S = [0, -v(3), v(2);
+     v(3), 0, -v(1);
+     -v(2), v(1), 0];
+end
+
+function [R, T, E] = deriveTransformations(E_final, matched1, matched2)
+    [U, ~, V] = svd(E_final);
+    W = [0, -1, 0; 1, 0, 0; 0, 0, 1];
+    R1 = U * W * transpose(V);
+    R2 = U * transpose(W) * transpose(V);
+    
+    if (det(R1) < 0 || det(R2) < 0)
+        [U, ~, V] = svd(-E_final);
+        W = [0, -1, 0; 1, 0, 0; 0, 0, 1];
+        R1 = U * W * transpose(V);
+        R2 = U * transpose(W) * transpose(V);
+    end
+
+    T_plus = U(:, 3);
+    T_minus = -U(:, 3);
+
+    disp(det(R1));
+    disp(det(R2));
+    
+    candidateRTs = {R1, T_plus, R2, T_plus, R1, T_minus, R2, T_minus};
+
+    mostPos = 0;
+    bestR = [];
+    bestT = [];
+    for i=1:2:length(candidateRTs)
+        curr_R = candidateRTs{i};
+        curr_T = candidateRTs{i+1};
+        posCount = 0;
+        for j=1:size(matched1, 2)
+            feature_1_homogenous = [matched1(:, j); 1];
+            feature_2_homogenous = [matched2(:, j); 1];
+
+            Rg1 = curr_R * feature_1_homogenous;
+            A = [-Rg1, feature_2_homogenous];
+
+            res = pinv(A) * curr_T;
+            rho1 = res(1);
+            rho2 = res(2);
+
+            if (rho1 > 0) && (rho2 > 0)
+                posCount = posCount + 1;
+            end
+        end
+       if posCount > mostPos
+           mostPos = posCount;
+           bestR = curr_R;
+           bestT = curr_T;
+       end
+
+    end
+
+    bestTx = getSkewSymmetric(bestT); % [0, -bestT(3), bestT(2); bestT(3), 0, -bestT(1); -bestT(2), bestT(1), 0];
+    test_E = bestTx * bestR;
+
+    R = bestR;
+    T = bestT;
+    E = test_E;
+end
+
+function [R, T, E, matched1, matched2] = estimateRelativePose(PARAMS, Img1, Img2, K)
+
+    % converting to black and white
+    img1_bw = single(rgb2gray(Img1));
+    img2_bw = single(rgb2gray(Img2));
+
+    % using SFIT
+    [f1,d1] = vl_sift(img1_bw);
+    [f2,d2] = vl_sift(img2_bw);
+
+    % Matching
+    [matches, scores] = vl_ubcmatch(d1, d2);
+    % disp(matches);
+
+    % creating rank order list 
+    [sortedScores, sortedIndices] = sort(scores, 'descend');
+    sortedMatches = matches(:, sortedIndices);
+    n = floor(0.8 * size(sortedMatches, 2));
+    top_n = sortedMatches(:, 1:n);
+    
+%     top_n = matches(:, 1:n);
+
+    matched1 = f1(1:2, top_n(1, :));
+    matched2 = f2(1:2, top_n(2, :));
+
+    [E_final, inlierIdxs] = Ransac4Essential(PARAMS, matched1, matched2, K);
+    
+    matched1 = matched1(:, inlierIdxs);
+    matched2 = matched2(:, inlierIdxs);
+
+    [R,T,E] = deriveTransformations(E_final, matched1, matched2);
+
+end
+
+% RANSAC ------------------------------------------------------------------
+
+function [E, inlier_Idx] = Ransac4Essential(PARAMS, gamma1, gamma2, K)
+    maxInliers = 0;
+    
+    gamma1_homogeneous = [gamma1; ones(1, size(gamma1, 2))];
+    gamma2_homogeneous = [gamma2; ones(1, size(gamma2, 2))];
+    
+    for i=1:PARAMS.RANSAC_ITERATIONS
+        sample_col_idxs = randperm(size(gamma1, 2), 5);
+        samples = ones(5, 3, 2);
+        samples(:, 1:2, 1) = gamma1(:, sample_col_idxs)';
+        samples(:, 1:2, 2) = gamma2(:, sample_col_idxs)';
+        
+%         disp(samples);
+        
+        essential_candidates = fivePointAlgorithmSelf(samples);
+        
+        for j=1:length(essential_candidates)
+            essential_test = essential_candidates{j};
+            F = transpose(inv(K)) * essential_test / K;
+            
+            epipolar_lines = F * gamma1_homogeneous;
+            distances = abs(sum(epipolar_lines .* gamma2_homogeneous, 1)) ./ sqrt(sum(epipolar_lines(1:2, :).^2, 1));
+            
+            inliers = distances < PARAMS.INLIER_THRESH;
+            
+            inlierCount = sum(inliers);
+            
+            if inlierCount > maxInliers
+%                 disp(essential_test);
+                maxInliers = inlierCount;                
+                inlier_Idx = find(inliers == 1);
+                E = essential_test;
+            end
+        end
+    end
+end
+
