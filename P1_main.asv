@@ -74,12 +74,10 @@ inMatched3 = matches23(2, matches_from_23_that_are_in_12);
 indices_from_12_that_are_inliers_in_23 = ismember(matches12_unique, matches_from_12_in_23_that_are_inliers);
 matches_from_12_that_are_inliers_in_23 = matches12_unique(indices_from_12_that_are_inliers_in_23);
 
-[sortedMatches, sortedIndices] = sort(matches_from_12_that_are_inliers_in_23, 'ascend');
-% [~, sortedMatched2Indices] = sort(inMatched2, 'ascend');
+[~, sortedIndices] = sort(matches_from_12_that_are_inliers_in_23, 'ascend');
+[~, sortedMatched2Indices] = sort(inMatched2, 'ascend');
 
-% get features that are in 12 and 23
-
-% inMatched3 = inMatched3(sortedMatched2Indices);
+inMatched3 = inMatched3(sortedMatched2Indices);
 
 points2D = f3(1:2, inMatched3);
 
@@ -89,42 +87,27 @@ points3D = points3D(:, sortedIndices);
 
 % Sanity Check ------------------------------------------------------------
 
-% CHECKING MATCHED 2 ------------------------------------------------------
+matched2 = matched2(:, idxs_of_unique);
+matched2 = matched2(:, indices_from_12_that_are_inliers_in_23);
+matched2 = m
 
-% matched2 = matched2(:, idxs_of_unique);
-% matched2 = matched2(:, indices_from_12_that_are_inliers_in_23);
-% matched2 = matched2(:, sortedIndices);
-% 
-% Points3DHomogenous = [points3D; ones(1, size(points3D, 2))];
-% % points2DMetric = K \ [points2D; ones(1, size(points2D, 2))];
-% 
-% RT_test = [R2, T2];
-% 
-% test_M = K * RT_test;
-% reprojected = test_M * Points3DHomogenous;
-% reprojected(1,:) = reprojected(1,:) ./ reprojected(3,:);
-% reprojected(2,:) = reprojected(2,:) ./ reprojected(3,:);
-% 
-% distances = sqrt(sum((reprojected(1:2,:) - matched2).^2));
-% 
-% disp(mean(distances));
+Points3DHomogenous = [points3D; ones(1, size(points3D, 2))];
+% points2DMetric = K \ [points2D; ones(1, size(points2D, 2))];
 
-% CHECKING MATCHED 3 ------------------------------------------------------
+RT_test = [R_gt, T_gt];
+       
+test_M = K * RT_test;
+reprojected = test_M * Points3DHomogenous;
+reprojected(1,:) = reprojected(1,:) ./ reprojected(3,:);
+reprojected(2,:) = reprojected(2,:) ./ reprojected(3,:);
 
-% RT_test = [R_gt, T_gt];
-% 
-% test_M = K * RT_test;
-% reprojected = test_M * Points3DHomogenous;
-% reprojected(1,:) = reprojected(1,:) ./ reprojected(3,:);
-% reprojected(2,:) = reprojected(2,:) ./ reprojected(3,:);
-% 
-% distances = sqrt(sum((reprojected(1:2,:) - points2D).^2));
-% 
-% disp(mean(distances));
+distances = sqrt(sum((reprojected(1:2,:) - ).^2));
+
+disp(mean(distances));
 
 % -------------------------------------------------------------------------
 
-[AbsR, AbsT] = Ransac4AbsPose(PARAMS, points3D, points2D, K);
+[AbsR, AbsT] = Ransac4AbsPose(PARAMS, points3D, points2D, K, R_gt, T_gt);
 
 [deltaR, deltaT] = getRT_Error(AbsR, AbsT, R_gt, T_gt);
 
@@ -153,7 +136,7 @@ function [deltaR, deltaT] = getRT_Error(R, T, Rg, Tg)
     deltaT = abs(dot(Tg, T) - 1);
 end
 
-function [AbsR, AbsT] = Ransac4AbsPose(PARAMS, Points3D, Points2D, K)
+function [AbsR, AbsT] = Ransac4AbsPose(PARAMS, Points3D, Points2D, K, R_gt, T_gt)
     maxInliers = 0;
 
     Points2DHomogenous = [Points2D; ones(1, size(Points2D, 2))];
@@ -173,8 +156,8 @@ function [AbsR, AbsT] = Ransac4AbsPose(PARAMS, Points3D, Points2D, K)
         for j=1:num_candidates
             R_test = Rs(:, :, j);
             T_test = Ts(:, j);
-            RT_test = [R_test, T_test];
-            % RT_test = [R_gt, T_gt];
+            % RT_test = [R_test, T_test];
+            RT_test = [R_gt, T_gt];
        
             test_M = K * RT_test;
             reprojected = test_M * Points3DHomogenous;
